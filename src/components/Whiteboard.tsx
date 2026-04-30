@@ -175,9 +175,16 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
 
     // Socket Events
     socket.on('canvas-update-remote', async (json) => {
-      // Don't disrupt active drawing or object interaction
-      if (isDrawing.current || canvas.getActiveObject()) return; 
+      // Don't disrupt active drawing 
+      if (isDrawing.current) return; 
       
+      const canvas = fabricCanvas.current;
+      if (!canvas) return;
+
+      // Check if user is currently transforming an object
+      const activeObj = canvas.getActiveObject();
+      if (activeObj && (activeObj as any).isMoving) return;
+
       isRemoteChange.current = true;
       await canvas.loadFromJSON(json);
       canvas.renderAll();
@@ -245,11 +252,22 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
       socketRef.current?.emit('canvas-update', { boardId, update: json });
     };
 
-    const handleObjectMoving = () => {
+    let moveThrottle: any = null;
+    const handleObjectMoving = (e: any) => {
       if (isRemoteChange.current || !canEdit) return;
-      // Throttling movement updates would be better, but for now just send it
-      const json = JSON.stringify(canvas.toJSON(['id']));
-      socketRef.current?.emit('canvas-update', { boardId, update: json });
+      if (e.target) e.target.isMoving = true;
+      
+      if (moveThrottle) return;
+      moveThrottle = setTimeout(() => {
+        const json = JSON.stringify(canvas.toJSON(['id']));
+        socketRef.current?.emit('canvas-update', { boardId, update: json });
+        moveThrottle = null;
+      }, 50); // 20fps for movement
+    };
+
+    const handleObjectModified = (e: any) => {
+      if (e.target) e.target.isMoving = false;
+      handleCanvasChange();
     };
 
     const handleMouseMove = (opt: fabric.TPointerEventInfo) => {
@@ -264,7 +282,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
     };
 
     canvas.off('object:added', handleCanvasChange);
-    canvas.off('object:modified', handleCanvasChange);
+    canvas.off('object:modified', handleObjectModified);
     canvas.off('object:removed', handleCanvasChange);
     canvas.off('path:created', handleCanvasChange);
     canvas.off('object:moving', handleObjectMoving);
@@ -272,7 +290,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
     canvas.off('object:rotating', handleObjectMoving);
     
     canvas.on('object:added', handleCanvasChange);
-    canvas.on('object:modified', handleCanvasChange);
+    canvas.on('object:modified', handleObjectModified);
     canvas.on('object:removed', handleCanvasChange);
     canvas.on('path:created', handleCanvasChange);
     canvas.on('object:moving', handleObjectMoving);
@@ -322,9 +340,10 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
+      if (moveThrottle) clearTimeout(moveThrottle);
       clearInterval(saveInterval);
       canvas.off('object:added', handleCanvasChange);
-      canvas.off('object:modified', handleCanvasChange);
+      canvas.off('object:modified', handleObjectModified);
       canvas.off('object:removed', handleCanvasChange);
       canvas.off('path:created', handleCanvasChange);
       canvas.off('object:moving', handleObjectMoving);
@@ -420,7 +439,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
           canvas.remove(target);
           canvas.renderAll();
           saveToHistory();
-          socketRef.current?.emit('canvas-update', { boardId, update: JSON.stringify(canvas.toJSON()) });
+          socketRef.current?.emit('canvas-update', { boardId, update: JSON.stringify(canvas.toJSON(['id'])) });
         }
         return;
       }
@@ -694,7 +713,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
           <div 
             key={id}
             className="absolute pointer-events-none z-10 transition-all duration-75"
-            style={{ left: pos.x, top: pos.y + 56 }} // Corrected for header offset
+            style={{ left: pos.x, top: pos.y }} // Removed incorrect 56px offset
           >
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M5.65376 12.3673H5.46026L5.31717 12.4976L0.500002 16.8829L0.500002 1.19841L11.7841 12.3673H5.65376Z" fill={pos.color} stroke="white"/>
