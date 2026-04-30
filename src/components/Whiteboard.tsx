@@ -262,7 +262,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
         const json = JSON.stringify(canvas.toJSON(['id']));
         socketRef.current?.emit('canvas-update', { boardId, update: json });
         moveThrottle = null;
-      }, 50); // 20fps for movement
+      }, 16); // 60fps for movement - silky smooth
     };
 
     const handleObjectModified = (e: any) => {
@@ -270,15 +270,20 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
       handleCanvasChange();
     };
 
+    let cursorThrottle: any = null;
     const handleMouseMove = (opt: fabric.TPointerEventInfo) => {
-      if (!socketRef.current || !canvas) return;
-      const pointer = canvas.getScenePoint(opt.e);
-      socketRef.current.emit('cursor-move', { 
-        boardId, 
-        x: pointer.x, 
-        y: pointer.y,
-        color: user?.photoURL ? undefined : '#3b82f6' 
-      });
+      if (!socketRef.current || !canvas || cursorThrottle) return;
+      
+      cursorThrottle = setTimeout(() => {
+        const pointer = canvas.getScenePoint(opt.e);
+        socketRef.current?.emit('cursor-move', {
+          boardId, 
+          x: pointer.x, 
+          y: pointer.y,
+          color: user?.photoURL ? undefined : '#3b82f6' 
+        });
+        cursorThrottle = null;
+      }, 33); // ~30fps for cursor to keep it fluid but efficient
     };
 
     canvas.off('object:added', handleCanvasChange);
@@ -341,6 +346,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       if (moveThrottle) clearTimeout(moveThrottle);
+      if (cursorThrottle) clearTimeout(cursorThrottle);
       clearInterval(saveInterval);
       canvas.off('object:added', handleCanvasChange);
       canvas.off('object:modified', handleObjectModified);
