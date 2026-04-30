@@ -41,6 +41,27 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
+const RemoteCursors = React.memo(({ cursors }: { cursors: Record<string, { x: number, y: number, color: string }> }) => {
+  return (
+    <>
+      {Object.entries(cursors).map(([id, pos]) => (
+        <div 
+          key={id}
+          className="absolute pointer-events-none z-10 transition-all duration-75"
+          style={{ transform: `translate(${pos.x}px, ${pos.y}px)` }}
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M5.65376 12.3673H5.46026L5.31717 12.4976L0.500002 16.8829L0.500002 1.19841L11.7841 12.3673H5.65376Z" fill={pos.color} stroke="white"/>
+          </svg>
+          <div className="bg-slate-900 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full ml-2 shadow-sm whitespace-nowrap opacity-80 uppercase tracking-tighter">
+            User
+          </div>
+        </div>
+      ))}
+    </>
+  );
+});
+
 export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fabricCanvas = useRef<fabric.Canvas | null>(null);
@@ -225,7 +246,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
         isRemoteChange.current = true;
         obj.set(data.changes);
         obj.setCoords();
-        canvas.renderAll();
+        canvas.requestRenderAll();
         isRemoteChange.current = false;
       }
     });
@@ -249,6 +270,15 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
         ...prev,
         [data.userId]: { x: data.x, y: data.y, color: data.color || '#3b82f6' }
       }));
+    });
+
+    socket.on('request-state', (data) => {
+      if (fabricCanvas.current && canEdit) {
+        socket.emit('send-state', { 
+          requesterId: data.requesterId, 
+          state: JSON.stringify(fabricCanvas.current.toJSON(['id'])) 
+        });
+      }
     });
 
     socket.on('user-disconnected', (userId) => {
@@ -797,21 +827,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
         <Toolbar activeTool={tool} setTool={setTool} color={color} setColor={setColor} disabled={!canEdit} />
         <canvas ref={canvasRef} />
         
-        {/* Remote Cursors */}
-        {Object.entries(cursors).map(([id, pos]) => (
-          <div 
-            key={id}
-            className="absolute pointer-events-none z-10 transition-all duration-75"
-            style={{ left: pos.x, top: pos.y }} // Removed incorrect 56px offset
-          >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M5.65376 12.3673H5.46026L5.31717 12.4976L0.500002 16.8829L0.500002 1.19841L11.7841 12.3673H5.65376Z" fill={pos.color} stroke="white"/>
-            </svg>
-            <div className="bg-slate-900 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full ml-2 shadow-sm whitespace-nowrap opacity-80 uppercase tracking-tighter">
-              User
-            </div>
-          </div>
-        ))}
+        <RemoteCursors cursors={cursors} />
         
         <div className="absolute bottom-6 right-6 flex items-center gap-3">
           <Presence boardId={boardId} socket={socketRef.current} onlineCount={Object.keys(cursors).length} />

@@ -24,6 +24,13 @@ async function startServer() {
     socket.on('join-board', (boardId) => {
       socket.join(boardId);
       console.log(`User ${socket.id} joined board ${boardId}`);
+      // Request current state from existing users to sync the new joiner instantly
+      socket.to(boardId).emit('request-state', { requesterId: socket.id });
+    });
+
+    socket.on('send-state', (data) => {
+      // data: { requesterId, state }
+      io.to(data.requesterId).emit('canvas-update-remote', data.state);
     });
 
     socket.on('canvas-update', (data) => {
