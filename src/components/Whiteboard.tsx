@@ -53,10 +53,12 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
   const [boardData, setBoardData] = useState<any>(null);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [cursors, setCursors] = useState<Record<string, { x: number, y: number, color: string }>>({});
   const isRemoteChange = useRef(false);
   const undoStack = useRef<string[]>([]);
   const redoStack = useRef<string[]>([]);
   const isHistoryUpdate = useRef(false);
+  const isDrawing = useRef(false);
 
   const isOwner = user?.uid === boardData?.ownerId || boardData?.ownerId === 'guest';
   const modeParam = new URLSearchParams(window.location.search).get('mode');
@@ -173,10 +175,28 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
 
     // Socket Events
     socket.on('canvas-update-remote', async (json) => {
+      // Don't disrupt active drawing or object interaction
+      if (isDrawing.current || canvas.getActiveObject()) return; 
+      
       isRemoteChange.current = true;
       await canvas.loadFromJSON(json);
       canvas.renderAll();
       isRemoteChange.current = false;
+    });
+
+    socket.on('cursor-move-remote', (data) => {
+      setCursors(prev => ({
+        ...prev,
+        [data.userId]: { x: data.x, y: data.y, color: data.color || '#3b82f6' }
+      }));
+    });
+
+    socket.on('user-disconnected', (userId) => {
+      setCursors(prev => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
     });
 
     const handleResize = () => {
@@ -200,8 +220,15 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
     const canvas = fabricCanvas.current;
     if (!canvas) return;
 
-    canvas.on('object:added', (e) => {
+    canvas.on('mouse:down', () => { isDrawing.current = true; });
+    canvas.on('mouse:up', () => { isDrawing.current = false; });
+    canvas.on('path:created', () => { isDrawing.current = false; });
+
+    canvas.on('object:added', (e: any) => {
       const obj = e.target;
+      if (obj && !obj.id) {
+        obj.id = nanoid();
+      }
       if (obj) {
         obj.set({
           perPixelTargetFind: true,
@@ -213,16 +240,27 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
     const handleCanvasChange = () => {
       if (isRemoteChange.current || isHistoryUpdate.current || !canEdit) return;
       
-      const json = JSON.stringify(canvas.toJSON());
+      const json = JSON.stringify(canvas.toJSON(['id']));
       saveToHistory();
       socketRef.current?.emit('canvas-update', { boardId, update: json });
     };
 
     const handleObjectMoving = () => {
       if (isRemoteChange.current || !canEdit) return;
-      // We emit full state for simplicity, though granular is better for scaling
-      // Throttling could be added here if needed
-      socketRef.current?.emit('canvas-update', { boardId, update: JSON.stringify(canvas.toJSON()) });
+      // Throttling movement updates would be better, but for now just send it
+      const json = JSON.stringify(canvas.toJSON(['id']));
+      socketRef.current?.emit('canvas-update', { boardId, update: json });
+    };
+
+    const handleMouseMove = (opt: fabric.TPointerEventInfo) => {
+      if (!socketRef.current || !canvas) return;
+      const pointer = canvas.getScenePoint(opt.e);
+      socketRef.current.emit('cursor-move', { 
+        boardId, 
+        x: pointer.x, 
+        y: pointer.y,
+        color: user?.photoURL ? undefined : '#3b82f6' 
+      });
     };
 
     canvas.off('object:added', handleCanvasChange);
@@ -280,6 +318,8 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
       }
     }, 30000);
 
+    canvas.on('mouse:move', handleMouseMove);
+
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       clearInterval(saveInterval);
@@ -290,6 +330,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
       canvas.off('object:moving', handleObjectMoving);
       canvas.off('object:scaling', handleObjectMoving);
       canvas.off('object:rotating', handleObjectMoving);
+      canvas.off('mouse:move', handleMouseMove);
     };
   }, [canEdit, boardId, saveToHistory, undo, redo, deleteSelected]);
 
@@ -536,7 +577,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
       canvas.discardActiveObject();
       canvas.renderAll();
       saveToHistory();
-      socketRef.current?.emit('canvas-update', { boardId, update: JSON.stringify(canvas.toJSON()) });
+      socketRef.current?.emit('canvas-update', { boardId, update: JSON.stringify(canvas.toJSON(['id'])) });
     } else {
       if (confirm('Clear entire board?')) {
         canvas.clear();
@@ -544,7 +585,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
         canvas.renderAll();
         
         saveToHistory();
-        const json = JSON.stringify(canvas.toJSON());
+        const json = JSON.stringify(canvas.toJSON(['id']));
         socketRef.current?.emit('canvas-update', { boardId, update: json });
       }
     }
@@ -648,8 +689,24 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
         <Toolbar activeTool={tool} setTool={setTool} color={color} setColor={setColor} disabled={!canEdit} />
         <canvas ref={canvasRef} />
         
+        {/* Remote Cursors */}
+        {Object.entries(cursors).map(([id, pos]) => (
+          <div 
+            key={id}
+            className="absolute pointer-events-none z-10 transition-all duration-75"
+            style={{ left: pos.x, top: pos.y + 56 }} // Corrected for header offset
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M5.65376 12.3673H5.46026L5.31717 12.4976L0.500002 16.8829L0.500002 1.19841L11.7841 12.3673H5.65376Z" fill={pos.color} stroke="white"/>
+            </svg>
+            <div className="bg-slate-900 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full ml-2 shadow-sm whitespace-nowrap opacity-80 uppercase tracking-tighter">
+              User
+            </div>
+          </div>
+        ))}
+        
         <div className="absolute bottom-6 right-6 flex items-center gap-3">
-          <Presence boardId={boardId} socket={socketRef.current} />
+          <Presence boardId={boardId} socket={socketRef.current} onlineCount={Object.keys(cursors).length} />
           {canEdit && (
             <Button variant="outline" size="sm" onClick={clearCanvas} className="text-red-500 border-red-100 hover:bg-red-50 px-2 py-1 h-8 rounded-full shadow-sm bg-white">
               <Trash2 className="w-3.5 h-3.5" />
