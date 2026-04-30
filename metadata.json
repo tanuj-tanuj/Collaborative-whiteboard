@@ -1,0 +1,6 @@
+{
+  "name": "Collaborative Whiteboard",
+  "description": "A real-time collaborative drawing tool with sticky notes, shapes, and instant broadcasting via WebSockets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

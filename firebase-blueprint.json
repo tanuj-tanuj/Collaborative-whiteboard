@@ -1,0 +1,25 @@
+{
+  "entities": {
+    "Board": {
+      "title": "Whiteboard",
+      "description": "A shared collaborative whiteboard session",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "canvasState": { "type": "string", "description": "Serialized JSON of the Fabric.js canvas" },
+        "publicPermission": { "type": "string", "enum": ["none", "view", "edit"], "default": "view" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "ownerId", "canvasState"]
+    }
+  },
+  "firestore": {
+    "/boards/{boardId}": {
+      "schema": "Board",
+      "description": "Whiteboard metadata and state"
+    }
+  }
+}
