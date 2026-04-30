@@ -111,11 +111,12 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
     if (!canvas || !canEdit) return;
     const activeObjects = canvas.getActiveObjects();
     if (activeObjects.length > 0) {
+      const ids = activeObjects.map((o: any) => o.id);
       canvas.remove(...activeObjects);
       canvas.discardActiveObject();
       canvas.renderAll();
       saveToHistory();
-      socketRef.current?.emit('canvas-update', { boardId, update: JSON.stringify(canvas.toJSON()) });
+      socketRef.current?.emit('object-removed', { boardId, ids });
     }
   }, [canEdit, boardId, saveToHistory]);
 
@@ -191,6 +192,58 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
       isRemoteChange.current = false;
     });
 
+    socket.on('object-added-remote', async (data) => {
+      const canvas = fabricCanvas.current;
+      if (!canvas || isDrawing.current) return;
+      
+      isRemoteChange.current = true;
+      try {
+        const enlivened = await fabric.util.enlivenObjects([data.object]);
+        enlivened.forEach((obj: any) => {
+          // Check if it's a valid fabric object that can be added to canvas
+          if (obj && typeof obj.setCoords === 'function') {
+            // Check if object already exists to avoid duplicates
+            const existing = canvas.getObjects().find((o: any) => o.id === obj.id);
+            if (!existing) {
+              canvas.add(obj);
+            }
+          }
+        });
+        canvas.renderAll();
+      } catch (err) {
+        console.error('Error enlivening remote object', err);
+      }
+      isRemoteChange.current = false;
+    });
+
+    socket.on('object-modified-remote', (data) => {
+      const canvas = fabricCanvas.current;
+      if (!canvas || isDrawing.current) return;
+      
+      const obj = canvas.getObjects().find((o: any) => (o as any).id === data.id);
+      if (obj) {
+        isRemoteChange.current = true;
+        obj.set(data.changes);
+        obj.setCoords();
+        canvas.renderAll();
+        isRemoteChange.current = false;
+      }
+    });
+
+    socket.on('object-removed-remote', (data) => {
+      const canvas = fabricCanvas.current;
+      if (!canvas) return;
+      
+      const objectsToRemove = canvas.getObjects().filter((o: any) => data.ids.includes(o.id));
+      if (objectsToRemove.length > 0) {
+        isRemoteChange.current = true;
+        canvas.remove(...objectsToRemove);
+        canvas.discardActiveObject();
+        canvas.renderAll();
+        isRemoteChange.current = false;
+      }
+    });
+
     socket.on('cursor-move-remote', (data) => {
       setCursors(prev => ({
         ...prev,
@@ -244,30 +297,62 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
       }
     });
 
-    const handleCanvasChange = () => {
+    const handleObjectAdded = (e: any) => {
       if (isRemoteChange.current || isHistoryUpdate.current || !canEdit) return;
+      const obj = e.target;
+      if (!obj) return;
       
-      const json = JSON.stringify(canvas.toJSON(['id']));
+      if (!obj.id) obj.id = nanoid();
+      
+      const json = obj.toJSON(['id']);
+      socketRef.current?.emit('object-added', { boardId, object: json });
       saveToHistory();
-      socketRef.current?.emit('canvas-update', { boardId, update: json });
+    };
+
+    const handleObjectRemoved = (e: any) => {
+      if (isRemoteChange.current || isHistoryUpdate.current || !canEdit) return;
+      const obj = e.target;
+      if (!obj) return;
+      
+      socketRef.current?.emit('object-removed', { boardId, ids: [obj.id] });
+      saveToHistory();
+    };
+
+    const handleObjectModified = (e: any) => {
+      if (isRemoteChange.current || isHistoryUpdate.current || !canEdit) return;
+      const obj = e.target;
+      if (!obj) return;
+      
+      if (obj.isMoving) obj.isMoving = false;
+      
+      const changes = obj.toJSON(['id']);
+      socketRef.current?.emit('object-modified', { boardId, id: obj.id, changes });
+      saveToHistory();
     };
 
     let moveThrottle: any = null;
     const handleObjectMoving = (e: any) => {
       if (isRemoteChange.current || !canEdit) return;
-      if (e.target) e.target.isMoving = true;
+      const obj = e.target;
+      if (obj) obj.isMoving = true;
       
       if (moveThrottle) return;
       moveThrottle = setTimeout(() => {
-        const json = JSON.stringify(canvas.toJSON(['id']));
-        socketRef.current?.emit('canvas-update', { boardId, update: json });
+        if (obj) {
+          socketRef.current?.emit('object-modified', { 
+            boardId, 
+            id: obj.id, 
+            changes: {
+              left: obj.left,
+              top: obj.top,
+              scaleX: obj.scaleX,
+              scaleY: obj.scaleY,
+              angle: obj.angle
+            } 
+          });
+        }
         moveThrottle = null;
-      }, 16); // 60fps for movement - silky smooth
-    };
-
-    const handleObjectModified = (e: any) => {
-      if (e.target) e.target.isMoving = false;
-      handleCanvasChange();
+      }, 16); 
     };
 
     let cursorThrottle: any = null;
@@ -286,18 +371,16 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
       }, 33); // ~30fps for cursor to keep it fluid but efficient
     };
 
-    canvas.off('object:added', handleCanvasChange);
+    canvas.off('object:added', handleObjectAdded);
     canvas.off('object:modified', handleObjectModified);
-    canvas.off('object:removed', handleCanvasChange);
-    canvas.off('path:created', handleCanvasChange);
+    canvas.off('object:removed', handleObjectRemoved);
     canvas.off('object:moving', handleObjectMoving);
     canvas.off('object:scaling', handleObjectMoving);
     canvas.off('object:rotating', handleObjectMoving);
     
-    canvas.on('object:added', handleCanvasChange);
+    canvas.on('object:added', handleObjectAdded);
     canvas.on('object:modified', handleObjectModified);
-    canvas.on('object:removed', handleCanvasChange);
-    canvas.on('path:created', handleCanvasChange);
+    canvas.on('object:removed', handleObjectRemoved);
     canvas.on('object:moving', handleObjectMoving);
     canvas.on('object:scaling', handleObjectMoving);
     canvas.on('object:rotating', handleObjectMoving);
@@ -348,10 +431,9 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
       if (moveThrottle) clearTimeout(moveThrottle);
       if (cursorThrottle) clearTimeout(cursorThrottle);
       clearInterval(saveInterval);
-      canvas.off('object:added', handleCanvasChange);
+      canvas.off('object:added', handleObjectAdded);
       canvas.off('object:modified', handleObjectModified);
-      canvas.off('object:removed', handleCanvasChange);
-      canvas.off('path:created', handleCanvasChange);
+      canvas.off('object:removed', handleObjectRemoved);
       canvas.off('object:moving', handleObjectMoving);
       canvas.off('object:scaling', handleObjectMoving);
       canvas.off('object:rotating', handleObjectMoving);
@@ -445,7 +527,7 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
           canvas.remove(target);
           canvas.renderAll();
           saveToHistory();
-          socketRef.current?.emit('canvas-update', { boardId, update: JSON.stringify(canvas.toJSON(['id'])) });
+          socketRef.current?.emit('object-removed', { boardId, ids: [(target as any).id] });
         }
         return;
       }
@@ -598,20 +680,21 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
     const activeObjects = canvas.getActiveObjects();
 
     if (activeObjects.length > 0) {
+      const ids = activeObjects.map((o: any) => o.id);
       canvas.remove(...activeObjects);
       canvas.discardActiveObject();
       canvas.renderAll();
       saveToHistory();
-      socketRef.current?.emit('canvas-update', { boardId, update: JSON.stringify(canvas.toJSON(['id'])) });
+      socketRef.current?.emit('object-removed', { boardId, ids });
     } else {
       if (confirm('Clear entire board?')) {
+        const ids = canvas.getObjects().map((o: any) => o.id);
         canvas.clear();
         canvas.backgroundColor = '#f8fafc';
         canvas.renderAll();
         
         saveToHistory();
-        const json = JSON.stringify(canvas.toJSON(['id']));
-        socketRef.current?.emit('canvas-update', { boardId, update: json });
+        socketRef.current?.emit('object-removed', { boardId, ids });
       }
     }
   };

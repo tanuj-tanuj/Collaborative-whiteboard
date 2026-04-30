@@ -27,9 +27,22 @@ async function startServer() {
     });
 
     socket.on('canvas-update', (data) => {
-      // data: { boardId, delta } or full state? 
-      // For simplicity in this demo, it broadcasts the update to others
       socket.to(data.boardId).emit('canvas-update-remote', data.update);
+    });
+
+    socket.on('object-modified', (data) => {
+      // data: { boardId, id, changes }
+      socket.to(data.boardId).emit('object-modified-remote', data);
+    });
+
+    socket.on('object-added', (data) => {
+      // data: { boardId, object }
+      socket.to(data.boardId).emit('object-added-remote', data);
+    });
+
+    socket.on('object-removed', (data) => {
+      // data: { boardId, ids }
+      socket.to(data.boardId).emit('object-removed-remote', data);
     });
 
     socket.on('cursor-move', (data) => {
