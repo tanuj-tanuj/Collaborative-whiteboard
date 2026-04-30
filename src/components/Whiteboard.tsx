@@ -218,13 +218,28 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
       socketRef.current?.emit('canvas-update', { boardId, update: json });
     };
 
+    const handleObjectMoving = () => {
+      if (isRemoteChange.current || !canEdit) return;
+      // We emit full state for simplicity, though granular is better for scaling
+      // Throttling could be added here if needed
+      socketRef.current?.emit('canvas-update', { boardId, update: JSON.stringify(canvas.toJSON()) });
+    };
+
     canvas.off('object:added', handleCanvasChange);
     canvas.off('object:modified', handleCanvasChange);
     canvas.off('object:removed', handleCanvasChange);
+    canvas.off('path:created', handleCanvasChange);
+    canvas.off('object:moving', handleObjectMoving);
+    canvas.off('object:scaling', handleObjectMoving);
+    canvas.off('object:rotating', handleObjectMoving);
     
     canvas.on('object:added', handleCanvasChange);
     canvas.on('object:modified', handleCanvasChange);
     canvas.on('object:removed', handleCanvasChange);
+    canvas.on('path:created', handleCanvasChange);
+    canvas.on('object:moving', handleObjectMoving);
+    canvas.on('object:scaling', handleObjectMoving);
+    canvas.on('object:rotating', handleObjectMoving);
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!canEdit) return;
@@ -271,6 +286,10 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
       canvas.off('object:added', handleCanvasChange);
       canvas.off('object:modified', handleCanvasChange);
       canvas.off('object:removed', handleCanvasChange);
+      canvas.off('path:created', handleCanvasChange);
+      canvas.off('object:moving', handleObjectMoving);
+      canvas.off('object:scaling', handleObjectMoving);
+      canvas.off('object:rotating', handleObjectMoving);
     };
   }, [canEdit, boardId, saveToHistory, undo, redo, deleteSelected]);
 
@@ -340,9 +359,12 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
     }
 
     canvas.isDrawingMode = tool === 'pen';
-    if (canvas.isDrawingMode && canvas.freeDrawingBrush) {
-       canvas.freeDrawingBrush.color = color;
-       canvas.freeDrawingBrush.width = 4;
+    if (canvas.isDrawingMode) {
+      if (!canvas.freeDrawingBrush) {
+        canvas.freeDrawingBrush = new fabric.PencilBrush(canvas);
+      }
+      canvas.freeDrawingBrush.color = color;
+      canvas.freeDrawingBrush.width = 4;
     }
 
     const onMouseDown = (opt: fabric.TPointerEventInfo) => {
@@ -506,16 +528,25 @@ export const Whiteboard: React.FC<WhiteboardProps> = ({ boardId }) => {
   const clearCanvas = () => {
     if (!canEdit || !fabricCanvas.current) return;
     
-    // Safer confirm replacement if needed, but let's fix the logic first
-    if (confirm('Clear entire board?')) {
-      const canvas = fabricCanvas.current;
-      canvas.clear();
-      canvas.backgroundColor = '#f8fafc';
+    const canvas = fabricCanvas.current;
+    const activeObjects = canvas.getActiveObjects();
+
+    if (activeObjects.length > 0) {
+      canvas.remove(...activeObjects);
+      canvas.discardActiveObject();
       canvas.renderAll();
-      
       saveToHistory();
-      const json = JSON.stringify(canvas.toJSON());
-      socketRef.current?.emit('canvas-update', { boardId, update: json });
+      socketRef.current?.emit('canvas-update', { boardId, update: JSON.stringify(canvas.toJSON()) });
+    } else {
+      if (confirm('Clear entire board?')) {
+        canvas.clear();
+        canvas.backgroundColor = '#f8fafc';
+        canvas.renderAll();
+        
+        saveToHistory();
+        const json = JSON.stringify(canvas.toJSON());
+        socketRef.current?.emit('canvas-update', { boardId, update: json });
+      }
     }
   };
 
